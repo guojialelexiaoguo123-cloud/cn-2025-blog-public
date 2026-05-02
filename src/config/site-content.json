@@ -48,6 +48,20 @@
 			"value": "2406720255@qq.com",
 			"label": "",
 			"order": 1
+		},
+		{
+			"id": "button-1777688412720",
+			"type": "github",
+			"value": "https://github.com/guojialelexiaoguo123-cloud",
+			"label": "",
+			"order": 2
+		},
+		{
+			"id": "button-1777688413704",
+			"type": "juejin",
+			"value": "https://juejin.cn/user/3282520391550172",
+			"label": "",
+			"order": 3
 		}
 	],
 	"clockShowSeconds": false,
