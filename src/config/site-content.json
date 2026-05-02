@@ -1,8 +1,8 @@
 {
 	"meta": {
-		"title": "YYsuni",
-		"description": "YYsuni 的个人博客，记录前端开发、探索、笔记。前端 UI 更新代码仓库。",
-		"username": "Suni"
+		"title": "Guo",
+		"description": "Guo的个人博客",
+		"username": "Guo"
 	},
 	"theme": {
 		"colorBrand": "#2fcbe7",
@@ -33,7 +33,7 @@
 			"url": "/images/art/1c7b726fe720679b.jpg"
 		}
 	],
-	"currentArtImageId": "1c7b726fe720679b",
+	"currentArtImageId": "a46372ff45bc5524",
 	"backgroundImages": [
 		{
 			"id": "",
@@ -48,6 +48,20 @@
 			"value": "2406720255@qq.com",
 			"label": "",
 			"order": 1
+		},
+		{
+			"id": "button-1777688412720",
+			"type": "github",
+			"value": "https://github.com/guojialelexiaoguo123-cloud",
+			"label": "",
+			"order": 2
+		},
+		{
+			"id": "button-1777688413704",
+			"type": "juejin",
+			"value": "https://juejin.cn/user/3282520391550172",
+			"label": "",
+			"order": 3
 		}
 	],
 	"clockShowSeconds": false,
