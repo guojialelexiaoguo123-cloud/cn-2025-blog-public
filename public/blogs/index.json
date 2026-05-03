@@ -1,5 +1,17 @@
 [
   {
+    "slug": "00-02",
+    "title": "Node.js 超详细安装教程（零基础适用）",
+    "tags": [
+      "Node.js",
+      "环境"
+    ],
+    "date": "2026-05-03T22:40",
+    "summary": "Node.js",
+    "hidden": false,
+    "category": "代码实现"
+  },
+  {
     "slug": "00-01",
     "title": "第一篇文章",
     "tags": [
