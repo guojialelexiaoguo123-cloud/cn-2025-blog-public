@@ -34,20 +34,20 @@
 		{
 			"id": "1c7b726fe720679b",
 			"url": "/images/art/1c7b726fe720679b.jpg"
+		},
+		{
+			"id": "url-1777814323113",
+			"url": "https://img.cdn1.vip/i/69f7471c21d83_1777813276.webp"
 		}
 	],
-	"currentArtImageId": "a46372ff45bc5524",
+	"currentArtImageId": "url-1777814323113",
 	"backgroundImages": [
 		{
 			"id": "",
 			"url": ""
-		},
-		{
-			"id": "url-1777813288839",
-			"url": "https://img.cdn1.vip/i/69f7471c21d83_1777813276.webp"
 		}
 	],
-	"currentBackgroundImageId": "url-1777813288839",
+	"currentBackgroundImageId": "",
 	"socialButtons": [
 		{
 			"id": "button-1777688413704",
