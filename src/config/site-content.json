@@ -38,9 +38,13 @@
 		{
 			"id": "",
 			"url": ""
+		},
+		{
+			"id": "url-1777813288839",
+			"url": "https://img.cdn1.vip/i/69f7471c21d83_1777813276.webp"
 		}
 	],
-	"currentBackgroundImageId": "",
+	"currentBackgroundImageId": "url-1777813288839",
 	"socialButtons": [
 		{
 			"id": "button-1777688413704",
