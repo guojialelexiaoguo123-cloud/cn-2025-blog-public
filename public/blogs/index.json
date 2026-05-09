@@ -1,5 +1,20 @@
 [
   {
+    "slug": "01-03",
+    "title": "让 AI 真正记住你：从内存到持久化记忆系统",
+    "tags": [
+      "实现",
+      "ai",
+      "代码",
+      "记忆"
+    ],
+    "date": "2026-05-09T13:22",
+    "summary": "记忆系统做扎实",
+    "cover": "/blogs/01-03/027e3287393de31c.webp",
+    "hidden": false,
+    "category": "代码实现"
+  },
+  {
     "slug": "01-02",
     "title": "theone本地搭建教程",
     "tags": [
