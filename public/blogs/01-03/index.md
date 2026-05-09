@@ -1,4 +1,6 @@
 
+# 让 AI 真正记住你：从内存到持久化记忆系统
+
 > 系列第三篇。上篇把链路跑通了，但记忆存在内存里，服务一重启全没。这篇把记忆系统做扎实。
 
 ---
@@ -46,7 +48,7 @@
 
 ```
 L1 短期记忆   最近 N 轮对话原文，直接放 prompt
-L2 摘要记忆   每 N 轮触发一次，LLM 压缩成几百字，注入 system prompt
+L2 摘要记忆   token 超阈值时触发，LLM 压缩成几百字，注入 system prompt
 L3 关键记忆   实时提取用户说的重要信息，以结构化条目存入数据库
 ```
 
@@ -56,7 +58,7 @@ L3 关键记忆   实时提取用户说的重要信息，以结构化条目存�
 [角色设定]
 [L3 关键记忆条目]
 [L2 近期摘要]
-[L1 最近 N 轮原文]
+[L1 压缩后保留的最近几轮原文]
 [当前消息]
 ```
 
@@ -110,7 +112,7 @@ PG_DATABASE=chatbot
 
 然后建数据库表。新建一个 `init.sql`：
 
-> **Windows 用户注意：** 如果 `init.sql` 里有中文注释（比如 `-- 近期摘要表`），务必把文件保存为 **UTF-8 无 BOM** 格式。Windows 记事本默认保存的 UTF-8 带 BOM，`psql` 执行时会把 BOM 字节当成 SQL 语法解析，直接报语法错误。用 VS Code 保存时在右下角点编码，选"UTF-8"而不是"UTF-8 with BOM"。
+> **Windows 用户注意：** 如果 `init.sql` 里有中文注释，务必把文件保存为 **UTF-8 无 BOM** 格式。Windows 记事本默认保存的 UTF-8 带 BOM，`psql` 执行时会把 BOM 字节当成 SQL 语法解析，直接报语法错误。用 VS Code 保存时在右下角点编码，选"UTF-8"而不是"UTF-8 with BOM"。
 
 ```sql
 -- 近期摘要表（L2）
@@ -159,82 +161,116 @@ const pool = new pg.Pool({
   database: process.env.PG_DATABASE,
 })
 
-const HISTORY_KEY   = (userId) => `history:${userId}`
-const MAX_HISTORY   = 40   // 最多保留 40 条（20 轮对话）
-const SUMMARY_EVERY = 40   // 每满 40 条触发一次摘要压缩
+const HISTORY_KEY     = (userId) => `history:${userId}`
+const MAX_HISTORY     = 40    // Redis 里最多保留 40 条（20 轮），防止无限增长
+const TOKEN_THRESHOLD = 2000  // 估算 token 超过这个值才触发压缩
+const KEEP_RECENT     = 4     // 压缩后保留最近几条原文，和摘要一起作为上下文
+
+// 用字符数粗估 token 数
+// 中文约 1.5 char/token，英文约 4 char/token，取中间值 2 比较保险
+function estimateTokenCount(messages) {
+  const text = messages.map(m => m.content).join('')
+  return Math.ceil(text.length / 2)
+}
 
 // ─── L1：对话历史 ─────────────────────────────────────────
 
 export async function getHistory(userId) {
-  const raw = await redis.lrange(HISTORY_KEY(userId), 0, -1)
-  // lrange 返回从新到旧，reverse 变成从旧到新，符合模型期望的时间顺序
-  return raw.map(r => JSON.parse(r)).reverse()
+  try {
+    const raw = await redis.lrange(HISTORY_KEY(userId), 0, -1)
+    // lrange 返回从新到旧，reverse 变成从旧到新，符合模型期望的时间顺序
+    return raw.map(r => JSON.parse(r)).reverse()
+  } catch (err) {
+    console.error(`[${userId}] 读取历史失败:`, err.message)
+    return []  // 读不到就返回空，不要让整个对话崩掉
+  }
 }
 
 export async function saveHistory(userId, userMessage, aiReply) {
-  const key = HISTORY_KEY(userId)
+  try {
+    const key = HISTORY_KEY(userId)
 
-  // 分两次 lpush，顺序更清晰
-  await redis.lpush(key, JSON.stringify({ role: 'assistant', content: aiReply }))
-  await redis.lpush(key, JSON.stringify({ role: 'user',      content: userMessage }))
+    // 分两次 lpush，顺序更清晰
+    await redis.lpush(key, JSON.stringify({ role: 'assistant', content: aiReply }))
+    await redis.lpush(key, JSON.stringify({ role: 'user',      content: userMessage }))
 
-  // 只保留最近 MAX_HISTORY 条
-  await redis.ltrim(key, 0, MAX_HISTORY - 1)
+    // 只保留最近 MAX_HISTORY 条，防止 Redis 无限增长
+    await redis.ltrim(key, 0, MAX_HISTORY - 1)
 
-  // 检查是否需要触发摘要
-  const len = await redis.llen(key)
-  if (len >= MAX_HISTORY) {
-    triggerSummary(userId).catch(err => {
-      console.error(`[${userId}] 摘要生成失败:`, err.message)
-    })
+    // 按 token 估算判断是否触发压缩，而不是单纯按条数
+    // 好处：内容长的对话早触发，一堆"嗯""好的"这种短消息不频繁触发
+    const history = await getHistory(userId)
+    const estimated = estimateTokenCount(history)
+    if (estimated >= TOKEN_THRESHOLD) {
+      triggerSummary(userId).catch(err => {
+        console.error(`[${userId}] 摘要生成失败:`, err.message)
+      })
+    }
+  } catch (err) {
+    console.error(`[${userId}] 存储历史失败:`, err.message)
+    // 存储失败不影响回复，继续流程
   }
 }
 ```
 
-**关于 `MAX_HISTORY` 该设多少：**
+**关于 `MAX_HISTORY` 和 `TOKEN_THRESHOLD` 怎么配合：**
 
-上面设的 40 条（20 轮）是个比较舒适的值。DeepSeek-chat 的 context 上限是 64k token，一轮普通对话大概 100-200 token，40 条历史也就 4000-8000 token，加上角色设定和记忆注入，总量控制在 15000 token 以内完全没问题，成本极低。
+`MAX_HISTORY` 是 Redis 里的硬上限，防止 key 无限增长，属于兜底机制。`TOKEN_THRESHOLD` 才是真正控制压缩时机的参数——内容长的对话（用户写长句）会早触发，内容短的（大量"嗯""好的"）不会频繁触发，比单纯按条数更合理。
 
-上篇用的 20 条是过于保守的起点。实际上可以调到 40-60 条，对话连贯性会明显更好，用户不会频繁感觉"它忘了刚才说的事"。粗略原则：角色设定 prompt 越长就把 `MAX_HISTORY` 调小，角色设定简短就大胆往上调。
+两个参数都可以按需调整。DeepSeek-chat 64k context，正常使用 `TOKEN_THRESHOLD = 2000` 足够保守，不会有压力。
 
 ---
 
 ## 第二层：滚动摘要
 
-对话历史攒到上限之后，用 LLM 把它压缩成一段摘要，然后清空历史，重新开始积累。摘要会注入到每次对话的 system prompt 里，让模型知道"之前大概发生过什么"。
+对话历史的 token 估算超阈值之后，用 LLM 把它压缩成摘要，然后**只清掉旧的部分，保留最近几条原文**。
+
+保留最近几条的原因：摘要是压缩后的信息，细节有损失。如果全清掉，下一轮对话和摘要之间会有一个衔接的"断层感"。保留最近 2-4 条，让模型知道刚刚发生了什么，过渡更自然。
 
 ```js
 // memory.js（续）
 import { summarizeHistory } from './llm.js'
 
 async function triggerSummary(userId) {
-  const history = await getHistory(userId)
-  if (history.length === 0) return
+  try {
+    const history = await getHistory(userId)
+    if (history.length === 0) return
 
-  // 把旧摘要也传进去，新摘要会在旧摘要基础上累积，保持连续性
-  const oldSummary = await getSummary(userId)
-  const newSummary = await summarizeHistory(history, oldSummary)
+    // 把旧摘要也传进去，新摘要在旧摘要基础上累积，保持连续性
+    const oldSummary = await getSummary(userId)
+    const newSummary = await summarizeHistory(history, oldSummary)
 
-  // upsert：有就更新，没有就插入
-  await pool.query(
-    `INSERT INTO memory_summary (user_id, summary, updated_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (user_id) DO UPDATE
-     SET summary = $2, updated_at = NOW()`,
-    [userId, newSummary]
-  )
+    // upsert：有就更新，没有就插入
+    await pool.query(
+      `INSERT INTO memory_summary (user_id, summary, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE
+       SET summary = $2, updated_at = NOW()`,
+      [userId, newSummary]
+    )
 
-  // 清空 Redis 历史，重新开始积累
-  await redis.del(HISTORY_KEY(userId))
-  console.log(`[${userId}] 摘要已更新`)
+    // 不全删，保留最近 KEEP_RECENT 条原文
+    // 这样下一轮对话里 L1 还有最近几条可以直接看，衔接更自然
+    const key = HISTORY_KEY(userId)
+    await redis.ltrim(key, 0, KEEP_RECENT - 1)
+
+    console.log(`[${userId}] 摘要已更新，保留最近 ${KEEP_RECENT} 条原文`)
+  } catch (err) {
+    console.error(`[${userId}] triggerSummary 失败:`, err.message)
+  }
 }
 
 export async function getSummary(userId) {
-  const res = await pool.query(
-    'SELECT summary FROM memory_summary WHERE user_id = $1',
-    [userId]
-  )
-  return res.rows[0]?.summary ?? ''
+  try {
+    const res = await pool.query(
+      'SELECT summary FROM memory_summary WHERE user_id = $1',
+      [userId]
+    )
+    return res.rows[0]?.summary ?? ''
+  } catch (err) {
+    console.error(`[${userId}] 读取摘要失败:`, err.message)
+    return ''
+  }
 }
 ```
 
@@ -251,31 +287,42 @@ export async function summarizeHistory(history, oldSummary) {
     ? `以下是之前的摘要：\n${oldSummary}\n\n以下是新的对话记录：\n${historyText}`
     : `以下是对话记录：\n${historyText}`
 
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        {
-          role: 'system',
-          content: `你是一个对话摘要助手。
+  try {
+    const res = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'system',
+            content: `你是一个对话摘要助手。
 请从对话记录中提炼关键信息，输出一段简洁的摘要，控制在200字以内。
 重点保留：用户的情绪状态、提到的重要事件、个人信息、偏好、以及值得记住的细节。
 不需要总结AI说了什么，只关注用户相关的信息。`
-        },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 400,
-      temperature: 0.3
+          },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 400,
+        temperature: 0.3
+      })
     })
-  })
 
-  const data = await res.json()
-  return data.choices[0].message.content
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`API 错误: ${res.status} ${err}`)
+    }
+
+    const data = await res.json()
+    return data.choices[0].message.content
+  } catch (err) {
+    console.error('摘要生成失败:', err.message)
+    // 摘要失败时返回旧摘要，不要丢掉已有信息
+    return oldSummary
+  }
 }
 ```
 
@@ -317,14 +364,19 @@ export async function saveFactsAsync(userId, userMessage) {
 }
 
 export async function getFacts(userId) {
-  const res = await pool.query(
-    `SELECT fact FROM memory_facts
-     WHERE user_id = $1
-     ORDER BY created_at DESC
-     LIMIT 30`,
-    [userId]
-  )
-  return res.rows.map(r => r.fact)
+  try {
+    const res = await pool.query(
+      `SELECT fact FROM memory_facts
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT 30`,
+      [userId]
+    )
+    return res.rows.map(r => r.fact)
+  } catch (err) {
+    console.error(`[${userId}] 读取 facts 失败:`, err.message)
+    return []
+  }
 }
 ```
 
@@ -337,18 +389,19 @@ export async function extractFacts(userMessage, existingFacts = []) {
     ? `\n\n已知事实（若提取内容与此重复则忽略）：\n${existingFacts.map(f => `- ${f}`).join('\n')}`
     : ''
 
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        {
-          role: 'system',
-          content: `你是一个信息提取助手。
+  try {
+    const res = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'system',
+            content: `你是一个信息提取助手。
 从用户的消息中提取值得长期记忆的关键事实，以 JSON 数组格式输出。
 只提取明确的个人信息、重要事件、情绪状态、偏好。
 如果没有值得提取的信息，或内容与已知事实重复，返回空数组 []。
@@ -360,22 +413,27 @@ export async function extractFacts(userMessage, existingFacts = []) {
 
 输入："天气真好"
 输出：[]`
-        },
-        { role: 'user', content: userMessage }
-      ],
-      max_tokens: 200,
-      temperature: 0.1
+          },
+          { role: 'user', content: userMessage }
+        ],
+        max_tokens: 200,
+        temperature: 0.1
+      })
     })
-  })
 
-  const data = await res.json()
-  const text = data.choices[0].message.content.trim()
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`API 错误: ${res.status} ${err}`)
+    }
 
-  try {
+    const data = await res.json()
+    const text = data.choices[0].message.content.trim()
+
     const facts = JSON.parse(text)
     return Array.isArray(facts) ? facts : []
-  } catch {
-    // 模型偶尔不按格式输出，解析失败返回空数组，不影响主流程
+  } catch (err) {
+    // 解析失败或 API 失败，返回空数组，不影响主流程
+    console.error('extractFacts 失败:', err.message)
     return []
   }
 }
@@ -414,31 +472,45 @@ ${memorySection.join('\n\n')}`
     { role: 'user',   content: userMessage }
   ]
 
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages,
-      max_tokens: 200,
-      temperature: 0.9
+  try {
+    const res = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages,
+        max_tokens: 200,
+        temperature: 0.9
+      })
     })
-  })
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`DeepSeek API 错误: ${res.status} ${err}`)
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`DeepSeek API 错误: ${res.status} ${err}`)
+    }
+
+    const data = await res.json()
+    const reply = data.choices[0].message.content
+
+    if (!reply || reply.trim() === '') {
+      throw new Error('模型返回了空内容')
+    }
+
+    return reply
+  } catch (err) {
+    console.error('callLLM 失败:', err.message)
+    // API 挂了或者 Key 过期，返回一个兜底回复，不要让用户收不到任何消息
+    return '...'
   }
-
-  const data = await res.json()
-  return data.choices[0].message.content
 }
 ```
 
 "不要刻意提起'我记得你说过'"这条规则很重要。如果让 AI 每次都说"根据你之前提到的..."，用户会立刻出戏，感觉在跟一个在背台词的机器人聊天。记忆应该像人一样自然地融入对话。
+
+**关于兜底回复 `'...'`：** 网络问题或者 API Key 过期时，模型调用会失败。与其让用户什么都收不到（最差体验），不如发一个省略号——对于一个"内敛、有时候不知道怎么接话"的角色来说，这反而是合理的回复，不会太突兀。
 
 ---
 
@@ -497,28 +569,29 @@ AI：可以试试在 HSL 里单独拉蓝色的饱和度，再压一点高光…�
 你：你觉得我刚才拍的那组照片，用什么滤镜风格比较好？
 ```
 
-如果记忆系统工作正常，AI 应该能联系到上次提到的 A7M4 和蓝色调，给出有针对性的建议，而不是问"你在拍什么"。比如：
+如果记忆系统工作正常，AI 应该能联系到上次提到的 A7M4 和蓝色调，给出有针对性的建议：
 
 ```
 AI：你那组蓝调延时……要是想再冷一点，电影感的话可以试试青橙 LUT，
     把橙色推暖、蓝色往青偏……A7M4 的暗部宽容度够，这样拉不会糊。
 ```
 
-这就是记忆系统真正工作的感觉——不只是"记住了名字"，而是记住了上下文，能基于过去的对话做出有深度的回应。
+**测压缩后的保留行为：** 临时把 `TOKEN_THRESHOLD` 改成 100（很低，几条消息就触发），聊几轮，看控制台打印"摘要已更新"之后，检查 Redis 里还有几条：
 
-**用数据库直接验证：**
+```bash
+redis-cli llen history:u_xxxxx
+# 应该输出 4（KEEP_RECENT 的值）
+```
+
+同时查数据库确认摘要写入了：
 
 ```bash
 psql -h localhost -U postgres -d chatbot
-
--- 看关键信息有没有存进去
-SELECT * FROM memory_facts ORDER BY created_at DESC LIMIT 10;
-
--- 看摘要
 SELECT user_id, LEFT(summary, 100) FROM memory_summary;
+SELECT * FROM memory_facts ORDER BY created_at DESC LIMIT 10;
 ```
 
-**测去重效果：** 连续发两条类似的消息：
+**测去重：** 连续发两条类似的消息：
 
 ```
 你：我喜欢拍延时摄影
@@ -534,10 +607,11 @@ SELECT user_id, LEFT(summary, 100) FROM memory_summary;
 做完这篇之后，记忆系统已经相对完整：
 
 - 服务重启记忆不丢失（Redis + PostgreSQL 持久化）
-- 对话历史有弹性上限，不会撑爆 context
+- 按 token 估算触发压缩，比固定条数更合理
+- 压缩后保留最近几条原文，衔接更自然
 - 重要信息实时提取，有去重，长期保留
-- 三层记忆注入 prompt，模型能"想起"过去的事
-- 摘要在旧摘要基础上累积，记忆有连续性
+- 关键路径全部有 try/catch，API 挂了不会崩服务
+- 摘要失败时返回旧摘要，不丢已有记忆
 
 还没有的：
 
