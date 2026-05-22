@@ -1,5 +1,16 @@
 [
   {
+    "slug": "01-01",
+    "title": "写在期中考试后",
+    "tags": [
+      "感悟"
+    ],
+    "date": "2026-05-22T18:17",
+    "summary": "",
+    "hidden": false,
+    "category": ""
+  },
+  {
     "slug": "01-04",
     "title": "角色设计：让 AI 真的像个人",
     "tags": [
@@ -38,19 +49,6 @@
     "cover": "/blogs/01-02/cd8b3e321d2bf4dd.png",
     "hidden": false,
     "category": "代码实现"
-  },
-  {
-    "slug": "01-01",
-    "title": "拆解 TheOne 陪伴：一个 AI 是怎么住进你微信的",
-    "tags": [
-      "技术",
-      "ai"
-    ],
-    "date": "2026-05-09T11:39",
-    "summary": "拆解 TheOne 陪伴",
-    "cover": "/blogs/01-01/4ca8d21e22dd8d6a.webp",
-    "hidden": false,
-    "category": "总结"
   },
   {
     "slug": "00-02",
