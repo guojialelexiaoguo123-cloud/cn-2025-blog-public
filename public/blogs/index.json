@@ -11,33 +11,6 @@
     "category": ""
   },
   {
-    "slug": "01-04",
-    "title": "角色设计：让 AI 真的像个人",
-    "tags": [
-      "ai",
-      "角色设计"
-    ],
-    "date": "2026-05-09T14:05",
-    "summary": "角色设计：让 AI 真的像个人",
-    "hidden": false,
-    "category": ""
-  },
-  {
-    "slug": "01-03",
-    "title": "让 AI 真正记住你：从内存到持久化记忆系统",
-    "tags": [
-      "实现",
-      "ai",
-      "代码",
-      "记忆"
-    ],
-    "date": "2026-05-09T13:22",
-    "summary": "记忆系统做扎实",
-    "cover": "/blogs/01-03/027e3287393de31c.webp",
-    "hidden": false,
-    "category": "代码实现"
-  },
-  {
     "slug": "00-02",
     "title": "Node.js 超详细安装教程（零基础适用）",
     "tags": [
